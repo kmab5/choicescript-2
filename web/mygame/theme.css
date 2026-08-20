@@ -1,0 +1,13 @@
+/*
+ * theme.css — your game's look. Override any token from ../theme/tokens.css.
+ * No JavaScript, no build step. Delete everything here to use the default skin.
+ *
+ * Example:
+ *
+ * body {
+ *   --cs-paper: #101014;
+ *   --cs-ink: #E4E2DC;
+ *   --cs-accent: #C6552F;
+ *   --cs-font-body: Georgia, serif;
+ * }
+ */
