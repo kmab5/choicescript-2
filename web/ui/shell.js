@@ -157,7 +157,34 @@ function shellSetFavicon() {
   tryNext(0);
 }
 
+/*
+ * Persistence needs window.storeName. Upstream leaves it null unless the game
+ * declares an *ifid, and initStore() bails when it is null — so window.store is
+ * never created and saving throws "window.store is undefined". Preferences and
+ * achievements die the same way.
+ *
+ * A game without an *ifid should still be playable and saveable, so derive a
+ * stable name. compile.js bakes one in for published builds; this covers the
+ * dev server and any shell that was not compiled.
+ */
+function shellEnsureStoreName() {
+  if (window.storeName) return;
+  var basis = (window.location && window.location.pathname) || 'mygame';
+  var slug = String(basis).replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  window.storeName = 'CS-' + (slug || 'mygame');
+  if (typeof console !== 'undefined' && console.info) {
+    console.info('No *ifid declared; using derived save name "' + window.storeName +
+      '". Add an *ifid to startup.txt for a stable one.');
+  }
+}
+
+/* True when saving is actually possible. */
+function shellCanSave() {
+  return typeof initStore === 'function' && !!initStore();
+}
+
 function shellBoot() {
+  shellEnsureStoreName();
   loadPreferences();
   shellSetFavicon();
   appMount();

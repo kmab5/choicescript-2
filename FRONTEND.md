@@ -22,6 +22,14 @@ runtime. Both the served game and `compile.js` work from that folder.
 Note that running `compile.js` rewrites `mygame.js`, regenerating the scene list
 and starting stats from your `startup.txt`. That is expected.
 
+**Scenes reached only by `*gosub_scene` are bundled too.** They never appear in
+`*scene_list`, so a naive build omits them and the game fails at runtime with
+"Couldn't load scene". The compiler crawls `*gosub_scene`, `*goto_scene` and
+`*redirect_scene` references out of the scene text, transitively. This works in
+both `compile.command` (Node) and `compile.html` (browser) — the browser cannot
+read directories, so reference crawling rather than directory scanning is what
+makes that path correct.
+
 ### Importing an already-published game
 
 Published games ship a complete copy of the OLD runtime, including their own

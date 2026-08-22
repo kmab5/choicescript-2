@@ -1,4 +1,7 @@
 knownScenes = [];
+// scenes discovered by crawling *gosub_scene / *goto_scene references rather
+// than declared in *scene_list; a missing one warns instead of failing
+var crawledScenes = [];
 var scene_object = "";
 var success = true;
 var skip = false;
@@ -172,6 +175,29 @@ function compile(){
     }
   }
 
+  //3.5 Preserve the favicon. Step 4 strips every <link>, which would drop it,
+  //    and a relative href would not resolve beside a single exported file
+  //    anyway. Inline it as a data URI.
+  var faviconTag = "";
+  var iconMatch = /<link[^>]*rel=["']icon["'][^>]*>/i.exec(game_html);
+  if (iconMatch) {
+    var hrefMatch = /href=["']([^"']+)["']/i.exec(iconMatch[0]);
+    if (hrefMatch) {
+      var iconPath = hrefMatch[1];
+      var resolved = /^\.\.\//.test(iconPath)
+        ? rootDir + iconPath.replace(/^\.\.\//, "")
+        : rootDir + "mygame/" + iconPath;
+      var inlined = slurpImage(resolved);
+      if (/^data:/.test(inlined)) {
+        faviconTag = '<link rel="icon" href="' + inlined + '">';
+        console.log("");
+        console.log("Favicon inlined from: " + resolved);
+      } else {
+        console.log("  ! favicon not found: " + resolved);
+      }
+    }
+  }
+
   //4. Remove css links
   patt = /^<link[\s][\w'"\=\s\.\/]*>/gim;
   game_html=game_html.replace(patt,"");
@@ -258,16 +284,37 @@ function compile(){
       csTitle = csTitle.replace(patt, "");
       patt = /<title>.*<\/title>/i;
       if (patt.exec(top)) top = top.replace(patt, "<title>" + csTitle + "</title>");
-      patt = /<h1.*>.*<\/h1>/i;
-      if (patt.exec(bottom)) bottom = bottom.replace(patt, "<h1 id='title' class='gameTitle'>" + csTitle + "</h1>");
+      // Keep whatever attributes the shell put on the tag. Replacing them with
+      // class='gameTitle' strips cs-title, whose flex rule is what spaces the
+      // header, so the title and buttons collapse together.
+      patt = /<h1([^>]*)>[\s\S]*?<\/h1>/i;
+      if (patt.exec(bottom)) {
+        bottom = bottom.replace(patt, function (m, attrs) {
+          if (!/id\s*=/.test(attrs)) attrs += ' id="title"';
+          return "<h1" + attrs + ">" + csTitle + "</h1>";
+        });
+      }
       console.log("");
       console.log("Game title set to: " + csTitle);
     }
     if (csAuthor != "") {
       patt = /^\*author[\s]+/i
       csAuthor = csAuthor.replace(patt, "");
-      patt = /<h2.*>.*<\/h2>/i;
-      if (patt.exec(bottom)) bottom = bottom.replace(patt, '<h2 id="author" class="gameTitle">by ' + csAuthor + "</h2>");
+      // The shell uses <p id="author">, not <h2>, so match either and keep attrs.
+      patt = /<(h2|p)([^>]*\bid\s*=\s*["']author["'][^>]*)>[\s\S]*?<\/\1>/i;
+      if (patt.exec(bottom)) {
+        bottom = bottom.replace(patt, function (m, tag, attrs) {
+          return "<" + tag + attrs + ">by " + csAuthor + "</" + tag + ">";
+        });
+      } else {
+        patt = /<h2([^>]*)>[\s\S]*?<\/h2>/i;
+        if (patt.exec(bottom)) {
+          bottom = bottom.replace(patt, function (m, attrs) {
+            if (!/id\s*=/.test(attrs)) attrs += ' id="author"';
+            return "<h2" + attrs + ">by " + csAuthor + "</h2>";
+          });
+        }
+      }
       console.log("");
       console.log("Author set to: " + csAuthor);
     }
@@ -278,7 +325,16 @@ function compile(){
     top = top.replace('window.storeName = null;', `window.storeName = "CS-${ifid}";`)
     top += `<meta property="ifiction:ifid" content="${ifid}" prefix="ifiction: http://babel.ifarchive.org/protocol/iFiction/">`;
   } else {
-    console.log("WARNING: No *ifid. Refreshing the browser tab will erase all progress.");
+    // Without a storeName, initStore() bails and window.store is never created:
+    // saving throws, and preferences and achievements never persist. Derive a
+    // stable name from the title so the build is at least usable.
+    var slug = (csTitle || "mygame").replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "").toLowerCase();
+    top = top.replace('window.storeName = null;',
+      'window.storeName = "CS-' + (slug || "mygame") + '";');
+    console.log("");
+    console.log("No *ifid: using derived save name \"CS-" + slug + "\".");
+    console.log("WARNING: No *ifid. Add one to startup.txt for a stable save identity.");
     try {
       var example = crypto.randomUUID();
       console.log("  You can use this randomized IFID: *ifid " + example);
@@ -293,10 +349,41 @@ function compile(){
       scene_data = safeSlurpFile(rootDir+'mygame/scenes/' + knownScenes[i]);
       if (scene_data === null || typeof scene_data === 'undefined') {
         if ("choicescript_upgrade.txt" === knownScenes[i]) continue;
+        if (crawledScenes.indexOf(knownScenes[i]) !== -1) {
+          // Referenced by a *gosub_scene we found while crawling, but not
+          // present. Could be a conditional branch the author never shipped,
+          // or a reference inside a comment. Warn and carry on.
+          console.log("  ! referenced but missing, skipping: " + knownScenes[i]);
+          knownScenes.splice(i, 1);
+          i--;
+          continue;
+        }
         throw new Error("Couldn't find file " + 'mygame/scenes/' + knownScenes[i]);
       }
       var scene = new Scene();
       scene.loadLines(scene_data);
+
+      // Crawl cross-scene references. A scene reached only by *gosub_scene,
+      // *goto_scene or *redirect_scene never appears in *scene_list, so a build
+      // driven by that list alone omits it and the game dies at runtime with
+      // "Couldn't load scene". Directory scanning only works under Node;
+      // compile.html runs in a browser and cannot read directories. Reading the
+      // references out of the scene text works in both, and pulls in
+      // dependencies transitively because this loop grows as we append.
+      for (var ln = 0; ln < scene.lines.length; ln++) {
+        var ref = /^\s*\*(?:gosub_scene|goto_scene|redirect_scene)\s+(\S+)/i
+          .exec(scene.lines[ln]);
+        if (!ref) continue;
+        var refName = ref[1].replace(/["']/g, "");
+        // skip variable references like *goto_scene {var}
+        if (/[{}$]/.test(refName)) continue;
+        if (crawledScenes.indexOf(refName + ".txt") === -1 &&
+            knownScenes.indexOf(refName + ".txt") === -1) {
+          crawledScenes.push(refName + ".txt");
+        }
+        addFile(refName + ".txt");
+      }
+
       var sceneName = knownScenes[i].replace(/\.txt/gi,"");
       sceneName = sceneName.replace(/ /g, "_");
       if (typeof slurpImage !== "undefined") {
@@ -304,7 +391,10 @@ function compile(){
           let result = /^(\s*\*)(\w+)(.*)/.exec(line);
           if (!result) return line;
           let command = result[2].toLowerCase();
-          if (!/(text_)image/.test(command)) return line;
+          // NOTE: the original guard was /(text_)image/, where the group is
+          // REQUIRED, so plain *image never matched and its file was never
+          // inlined. Make the prefix optional.
+          if (!/^(text_)?image$/.test(command)) return line;
           let data = trim(result[3]);
           let match = /(\S+) (\S+)(.*)/.exec(data);
           if (match) {
@@ -325,8 +415,33 @@ function compile(){
 
   //8. Reassemble the document (selfnote: allScenes object seems to cause issues if not in its own pair of script tags)
   console.log("Assembling new html file...");
-  var new_game = top + "<script>" + scene_object + "<\/script><script>" + jsStore + "<\/script><style>" + cssStore + "</style>" + bottom;
+  var new_game = top + faviconTag + "<script>" + scene_object + "<\/script><script>" + jsStore + "<\/script><style>" + cssStore + "</style>" + bottom;
   return {content: new_game, title: csTitle};
+}
+
+// Inline an image as a data URI. compile.js referenced slurpImage but never
+// defined it, so *image / *text_image kept relative paths that do not resolve
+// next to a single exported HTML file: the splash image simply never appeared.
+function slurpImage(file) {
+  if (typeof fs === "undefined" || !fs || !fs.readFileSync) return file;
+  // NOTE: compile() is invoked near the top of this file, before module-level
+  // var assignments further down have run. A hoisted `var` map would still be
+  // undefined here, so the table lives inside the function.
+  var IMAGE_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+    ".avif": "image/avif", ".bmp": "image/bmp"
+  };
+  try {
+    var ext = (file.match(/\.[a-z0-9]+$/i) || [""])[0].toLowerCase();
+    var mime = IMAGE_MIME[ext];
+    if (!mime) return file;
+    var data = fs.readFileSync(file);
+    return "data:" + mime + ";base64," + data.toString("base64");
+  } catch (e) {
+    console.log("  ! image not found, leaving path as-is: " + file);
+    return file;
+  }
 }
 
 function addFile(name) {

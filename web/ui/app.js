@@ -331,7 +331,7 @@
         <header class="cs-overlay-head">
           <h2 class="cs-overlay-title">${props.title}</h2>
           <button class="cs-icon-btn" onClick=${shellCloseOverlay}
-            aria-label="Close">&#215;</button>
+            aria-label="Close">×</button>
         </header>
         <div class="cs-overlay-body">${props.children}</div>
       </div>
@@ -405,9 +405,9 @@
     useEffect(function () { reload(); }, []);
 
     function doSave() {
-      savesWrite(nameSt[0], function (ok) {
-        msgSt[1](ok ? 'Saved.' : 'Could not save.');
-        nameSt[1]('');
+      savesWrite(nameSt[0], function (ok, reason) {
+        msgSt[1](ok ? 'Saved.' : (reason || 'Could not save.'));
+        if (ok) nameSt[1]('');
         reload();
       });
     }
@@ -486,7 +486,7 @@
         <legend>Text size</legend>
         <div class="cs-setting-options">
           <button class="cs-btn" onClick=${function () { changeFontSize(false); }}
-            aria-label="Smaller text">A&#8722;</button>
+            aria-label="Smaller text">A−</button>
           <span class="cs-setting-readout">${Math.round(settingsGetZoom() * 100)}%</span>
           <button class="cs-btn" onClick=${function () { changeFontSize(true); }}
             aria-label="Larger text">A+</button>

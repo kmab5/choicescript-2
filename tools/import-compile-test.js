@@ -57,6 +57,30 @@ try {
   fs.rmSync(live, { recursive: true, force: true });
   fs.cpSync(backup, live, { recursive: true });
 
+  /*
+   * The browser path. compile.html runs in a browser, where fs does not exist,
+   * so the Node directory scan is skipped. Scenes reached only via
+   * *gosub_scene must still be found, by crawling references out of the scene
+   * text. Simulate it by disabling the scan.
+   */
+  console.log('\nbrowser compile path (no directory scan)');
+  const compileSrc = path.join(root, 'compile.js');
+  const compileOrig = fs.readFileSync(compileSrc, 'utf8');
+  fs.writeFileSync(compileSrc, compileOrig.replace(
+    'if (typeof fs !== "undefined" && fs && fs.readdirSync) {', 'if (false) {'));
+  try {
+    cp.execFileSync('node', ['compile.js'], { cwd: root, stdio: 'pipe', timeout: 600000 });
+    const browserOut = fs.readFileSync(path.join(root, 'output.html'), 'utf8');
+    ok('gosub_scene-only scenes bundled without a directory scan',
+      /"utils":\s*\{"crc"/.test(browserOut) || !/gosub_scene\s+utils/.test(browserOut),
+      'utils missing from bundle');
+  } finally {
+    fs.writeFileSync(compileSrc, compileOrig);
+  }
+
+  fs.rmSync(live, { recursive: true, force: true });
+  fs.cpSync(backup, live, { recursive: true });
+
   console.log('\nimport');
   const importLog = cp.execFileSync('node',
     [path.join(root, 'tools', 'import-game.js'), path.join(root, 'fixtures', game)],
@@ -100,6 +124,21 @@ setTimeout(() => {
     !errors.some(m => /Couldn't load scene/.test(m)), errors.slice(0, 1).join());
   ok('no literal "undefined" rendered',
     !/>\s*undefined\s*</.test(text ? text.innerHTML : ''));
+
+  /* bugs reported from the compiled build */
+  ok('no raw HTML entities in the UI',
+    !/&#215;|&#8722;/.test(out));
+  ok('favicon inlined as a data URI',
+    /<link rel="icon" href="data:image\/[a-z+]+;base64,/.test(out));
+  const h1 = d.querySelector('h1#title');
+  ok('header keeps its layout class (cs-title)',
+    !!h1 && /cs-title/.test(h1.className), h1 ? h1.className : 'no h1');
+  const splash = d.querySelector('#text img');
+  ok('images inlined as data URIs',
+    !splash || /^data:image\//.test(splash.getAttribute('src') || ''),
+    splash ? (splash.getAttribute('src') || '').slice(0, 24) : 'no image');
+  ok('a save store exists even without *ifid',
+    !!win.storeName && !!win.initStore(), 'storeName=' + win.storeName);
 
   if (control) {
     control.dispatchEvent(new win.Event('click', { bubbles: true }));
