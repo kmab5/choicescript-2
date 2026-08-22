@@ -43,6 +43,9 @@
   --cs-space-5: 1.5rem;
   --cs-space-6: 2.5rem;
 
+  /* WCAG 2.1 AA minimum target size. Never override below this. */
+  --cs-touch: 44px;
+
   --cs-radius: 3px;
   --cs-rule-width: 1px;
 

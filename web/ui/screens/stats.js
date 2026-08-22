@@ -43,5 +43,11 @@
     });
 
     busPush({ kind: 'statchart', rows: rows });
+
+    /* The stock implementation sets these after drawing. Without them the
+     * engine believes the stats page is blank, so *finish returns to the story
+     * immediately and the overlay closes before anything is shown. */
+    this.prevLine = 'block';
+    this.screenEmpty = false;
   };
 })();

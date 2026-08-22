@@ -105,12 +105,26 @@ function compile(){
   //1. Grab the game's html file
   var url = rootDir+"mygame/index.html";
   var game_html = slurpFile(url, true);
+
+  // A published game ships its own mygame/index.html that loads the OLD runtime
+  // (../ui.js, ../style.css, ../alertify.min.js). Those files no longer exist,
+  // so building against that shell silently produces a large, completely inert
+  // page: none of the current UI is referenced, so none of it gets inlined.
+  // Detect that and build against the canonical shell instead.
+  if (/\.\.\/(ui|alertify(\.min)?)\.js|\.\.\/style\.css/.test(game_html)) {
+    console.log("");
+    console.log("NOTE: mygame/index.html is from an older ChoiceScript release.");
+    console.log("      Building against web/shell/index.html instead.");
+    console.log("      Run 'node tools/import-game.js <game>' to fix it permanently.");
+    game_html = slurpFile(rootDir+"shell/index.html", true);
+  }
     
   //2. Find and extract all .js file data
   var next_file = "";
   var patt = /<script.*?src=["'](.*?)["'][^>]*><\/script>/gim;
   var doesMatch;
   var jsStore = "";
+  var missingScripts = [];
   console.log("\nExtracting js data from:");
   while (doesMatch = patt.exec(game_html)) {
     console.log(doesMatch[1]);
@@ -121,11 +135,23 @@ function compile(){
     }
     if (next_file != "undefined" && next_file !== null) {
       jsStore = jsStore + "\n;\n" + next_file;
+    } else {
+      // Silently skipping a script produces a build that looks fine and is
+      // dead on arrival. Say so.
+      console.log("  ! MISSING: " + doesMatch[1] + " (not inlined)");
+      missingScripts.push(doesMatch[1]);
     }
   }
   
+  if (missingScripts.length) {
+    throw new Error("Cannot build: " + missingScripts.length +
+      " script file(s) referenced by mygame/index.html do not exist (" +
+      missingScripts.join(", ") + "). The resulting page would not run. " +
+      "Run 'node tools/import-game.js <game>' to import a published game correctly.");
+  }
+
   console.log("");
-  
+
   //3. Find and extract all .css file data
   patt = /^<link[\s][\w'"\=\s\.\/]*[\s]?href\=["']([\w\.\/]*.css)["']/gim;
   var cssStore = "";
@@ -133,9 +159,16 @@ function compile(){
   while (doesMatch = patt.exec(game_html)) {
     // console.log(doesMatch[0]);
     console.log(doesMatch[1]);
-    next_file = slurpFile(rootDir+'mygame/' + doesMatch[1], true);
-    if (next_file != "undefined" && next_file !== null) {
-      cssStore = cssStore + next_file;
+    try {
+      next_file = slurpFile(rootDir+'mygame/' + doesMatch[1], true);
+      if (next_file != "undefined" && next_file !== null) {
+        cssStore = cssStore + next_file;
+      }
+    } catch (e) {
+      // A game's index.html may reference a stylesheet that no longer exists
+      // (older published games shipped their own copy of the runtime). Warn and
+      // keep going rather than aborting the whole build.
+      console.log("  ! skipping missing stylesheet: " + doesMatch[1]);
     }
   }
 
@@ -157,6 +190,23 @@ function compile(){
   for (var i = 0; i < nav._sceneList.length; i++) {
     addFile(nav._sceneList[i] + ".txt");
   }
+
+  // Scenes reached only by *gosub_scene / *goto_scene never appear in
+  // *scene_list, so a build driven by that list alone omits them and the game
+  // dies at runtime with "Couldn't load scene". When we can read the directory
+  // (the Node path), bundle every scene file present.
+  if (typeof fs !== "undefined" && fs && fs.readdirSync) {
+    try {
+      var sceneDir = rootDir + "mygame/scenes";
+      var found = fs.readdirSync(sceneDir);
+      for (var f = 0; f < found.length; f++) {
+        if (/\.txt$/.test(found[f])) addFile(found[f]);
+      }
+    } catch (e) {
+      console.log("  ! could not scan scenes directory: " + e.message);
+    }
+  }
+
   verifyFileName("choicescript_stats.txt");
   verifyFileName("choicescript_upgrade.txt");
   

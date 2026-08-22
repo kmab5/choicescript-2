@@ -35,6 +35,16 @@ var bus = {
   modal: null,
   history: [],
   screen: 'game',
+
+  /* Overlay screens render ABOVE the story without touching it.
+   * null | "stats" | "saves" | "settings" | "achievements" | "menu" */
+  overlay: null,
+
+  /* The stats screen runs a real engine scene. Its output goes to a separate
+   * channel so it can never overwrite, or leak into, the story text. */
+  statsMode: false,
+  statsBlocks: [],
+  statsPending: null,
 };
 
 var busSubscribers = [];
@@ -61,12 +71,41 @@ function busSet(patch) {
 }
 
 function busPush(block) {
-  bus.blocks.push(block);
+  if (bus.statsMode) bus.statsBlocks.push(block);
+  else bus.blocks.push(block);
+  busNotify();
+}
+
+/*
+ * Authored *script blocks can append many DOM nodes in a tight loop (one per
+ * stat bar). Notifying on each would re-render the whole tree every time, so
+ * these coalesce into a single update on the next microtask.
+ */
+var busFlushScheduled = false;
+function busPushQuiet(block) {
+  if (bus.statsMode) bus.statsBlocks.push(block);
+  else bus.blocks.push(block);
+  if (busFlushScheduled) return;
+  busFlushScheduled = true;
+  var flush = function () { busFlushScheduled = false; busNotify(); };
+  if (typeof Promise !== 'undefined') Promise.resolve().then(flush);
+  else setTimeout(flush, 0);
+}
+
+function busSetPending(pending) {
+  if (bus.statsMode) bus.statsPending = pending;
+  else bus.pending = pending;
   busNotify();
 }
 
 /* Archive the current screen and start a fresh one. */
 function busAdvance() {
+  if (bus.statsMode) {
+    bus.statsBlocks = [];
+    bus.statsPending = null;
+    busNotify();
+    return;
+  }
   if (bus.blocks.length) bus.history.push(bus.blocks);
   bus.blocks = [];
   bus.pending = null;
@@ -80,6 +119,10 @@ function busReset() {
   bus.modal = null;
   bus.history = [];
   bus.screen = 'game';
+  bus.overlay = null;
+  bus.statsMode = false;
+  bus.statsBlocks = [];
+  bus.statsPending = null;
   busNotify();
 }
 

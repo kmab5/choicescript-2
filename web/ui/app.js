@@ -16,8 +16,28 @@
   var useState = htmPreact.useState;
   var useEffect = htmPreact.useEffect;
   var useRef = htmPreact.useRef;
+  var useLayoutEffect = htmPreact.useLayoutEffect;
+  var Fragment = htmPreact.Fragment || function (p) { return p.children; };
 
   /* --- blocks ------------------------------------------------------------ */
+
+  /*
+   * Mounts a raw DOM node produced by an authored *script block. The wrapper
+   * has no vnode children, so Preact never diffs inside it and the node keeps
+   * whatever the game built. Position comes from where the script ran.
+   */
+  function LegacyNode(props) {
+    var ref = useRef(null);
+    useLayoutEffect(function () {
+      var host = ref.current;
+      if (!host || !props.el) return;
+      if (props.el.parentNode !== host) {
+        window.__csRendering = true;
+        try { host.appendChild(props.el); } finally { window.__csRendering = false; }
+      }
+    });
+    return html`<div class="cs-legacy" ref=${ref}></div>`;
+  }
 
   function Block(props) {
     var b = props.block;
@@ -36,6 +56,12 @@
     }
     if (b.kind === 'statchart') {
       return html`<${StatChart} rows=${b.rows} />`;
+    }
+    if (b.kind === 'error') {
+      return html`<p class="cs-error-block" role="alert">${b.message}</p>`;
+    }
+    if (b.kind === 'node') {
+      return html`<${LegacyNode} el=${b.el} />`;
     }
     if (b.inline) {
       return html`<span dangerouslySetInnerHTML=${{ __html: b.html }} />`;
@@ -274,24 +300,69 @@
     </div>`;
   }
 
-  /* --- screens ----------------------------------------------------------- */
+  /* --- overlay shell ----------------------------------------------------- */
 
-  function BackBar(props) {
-    return html`<div class="cs-backbar">
-      <button class="cs-btn" onClick=${props.onBack}>${props.label || 'Back'}</button>
+  /*
+   * Screens render ABOVE the story in a dialog. The story stays mounted, so
+   * opening stats mid-scene cannot lose the player's place, and closing is
+   * just "stop showing it" — there is no state to restore and nothing to
+   * desync. This replaces the earlier approach of swapping bus.screen, where
+   * stats -> saves -> stats clobbered the saved return state and stranded the
+   * Next button.
+   */
+  function Overlay(props) {
+    var ref = useRef(null);
+
+    useEffect(function () {
+      function onKey(e) { if (e.key === 'Escape') shellCloseOverlay(); }
+      document.addEventListener('keydown', onKey);
+      if (ref.current) ref.current.focus();
+      return function () { document.removeEventListener('keydown', onKey); };
+    }, []);
+
+    return html`<div class="cs-overlay" role="dialog" aria-modal="true"
+                     aria-label=${props.title}
+                     onClick=${function (e) {
+                       if (e.target && e.target.classList.contains('cs-overlay')) {
+                         shellCloseOverlay();
+                       }
+                     }}>
+      <div class="cs-overlay-panel" tabindex="-1" ref=${ref}>
+        <header class="cs-overlay-head">
+          <h2 class="cs-overlay-title">${props.title}</h2>
+          <button class="cs-icon-btn" onClick=${shellCloseOverlay}
+            aria-label="Close">&#215;</button>
+        </header>
+        <div class="cs-overlay-body">${props.children}</div>
+      </div>
     </div>`;
   }
 
   function bb(text) {
-    return String(text || '')
+    return String(text === null || text === undefined ? '' : text)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/\[b\]/g, '<b>').replace(/\[\/b\]/g, '</b>')
       .replace(/\[i\]/g, '<i>').replace(/\[\/i\]/g, '</i>');
   }
 
+  /* --- stats ------------------------------------------------------------- */
+  /* Renders the stats channel, which is entirely separate from the story. */
+
+  function StatsScreen() {
+    return html`<div class="cs-statsbody">
+      <div id="statsText">
+        ${bus.statsBlocks.map(function (b, i) {
+          return html`<${Block} block=${b} key=${i} />`;
+        })}
+      </div>
+      <${Pending} pending=${bus.statsPending} />
+    </div>`;
+  }
+
+  /* --- achievements ------------------------------------------------------ */
+
   function AchievementsScreen() {
     var d = achievementsData();
-    var noneYet = d.earned.length === 0;
 
     function Item(props) {
       var a = props.a;
@@ -303,13 +374,11 @@
       </li>`;
     }
 
-    return html`<div class="cs-screen">
-      <h2 class="cs-screen-title">Achievements</h2>
+    return html`<div>
       <p class="cs-screen-summary">
-        ${d.score} of ${d.totalScore} points · ${d.earned.length} of ${d.total} unlocked
-        ${d.hiddenCount ? ' · ' + d.hiddenCount + ' hidden' : ''}
+        ${d.score} of ${d.totalScore} points · ${d.earned.length} of ${d.total} unlocked${d.hiddenCount ? ' · ' + d.hiddenCount + ' hidden' : ''}
       </p>
-      ${noneYet
+      ${d.earned.length === 0
         ? html`<p class="cs-empty">Nothing unlocked yet. Play on.</p>`
         : html`<ul class="cs-achievement-list">
             ${d.earned.map(function (a) { return html`<${Item} a=${a} key=${a.name} />`; })}
@@ -317,26 +386,42 @@
       ${d.locked.length
         ? html`<h3 class="cs-screen-subtitle">Still locked</h3>
           <ul class="cs-achievement-list">
-            ${d.locked.map(function (a) {
-              return html`<${Item} a=${a} locked=${true} key=${a.name} />`;
-            })}
+            ${d.locked.map(function (a) { return html`<${Item} a=${a} locked=${true} key=${a.name} />`; })}
           </ul>`
         : null}
-      <${BackBar} onBack=${function () { busSet({ screen: 'game' }); }} />
     </div>`;
   }
+
+  /* --- saves ------------------------------------------------------------- */
 
   function SavesScreen() {
     var st = useState(null);
     var saves = st[0];
     var setSaves = st[1];
+    var nameSt = useState('');
+    var msgSt = useState(null);
 
-    useEffect(function () {
-      savesLoad(function (list) { setSaves(list); });
-    }, []);
+    function reload() { savesLoad(function (list) { setSaves(list); }); }
+    useEffect(function () { reload(); }, []);
 
-    return html`<div class="cs-screen">
-      <h2 class="cs-screen-title">Saved games</h2>
+    function doSave() {
+      savesWrite(nameSt[0], function (ok) {
+        msgSt[1](ok ? 'Saved.' : 'Could not save.');
+        nameSt[1]('');
+        reload();
+      });
+    }
+
+    return html`<div>
+      <div class="cs-save-new">
+        <label class="cs-visually-hidden" for="cs-save-name">Name this save</label>
+        <input id="cs-save-name" class="cs-input-field" type="text"
+          placeholder="Name this save" value=${nameSt[0]}
+          onInput=${function (e) { nameSt[1](e.target.value); }} />
+        <button class="cs-btn cs-btn-primary" onClick=${doSave}>Save now</button>
+      </div>
+      ${msgSt[0] ? html`<p class="cs-screen-summary">${msgSt[0]}</p>` : null}
+
       ${saves === null
         ? html`<p class="cs-loading">Loading…</p>`
         : saves.length === 0
@@ -344,29 +429,32 @@
           : html`<ul class="cs-save-list">
               ${saves.map(function (save, i) {
                 return html`<li class="cs-save" key=${i}>
-                  <button class="cs-save-btn"
-                    onClick=${function () { savesRestore(save); }}>
+                  <button class="cs-save-btn" onClick=${function () { savesRestore(save); }}>
                     <span class="cs-save-name">${save.name || 'Untitled save'}</span>
                     <span class="cs-save-date">${savesFormatDate(save.timestamp)}</span>
                   </button>
                 </li>`;
               })}
             </ul>`}
-      <${BackBar} onBack=${function () { busSet({ screen: 'game' }); }} />
     </div>`;
   }
 
-  function Radios(props) {
+  /* --- settings ---------------------------------------------------------- */
+
+  function Choicelist(props) {
     return html`<fieldset class="cs-setting">
       <legend>${props.legend}</legend>
-      <div class="cs-setting-options">
+      <div class=${props.grid ? 'cs-setting-grid' : 'cs-setting-options'}>
         ${props.options.map(function (o) {
-          var id = 'cs-set-' + props.name + '-' + o.value;
-          return html`<div class="cs-setting-option" key=${o.value}>
+          var id = 'cs-set-' + props.name + '-' + o.id;
+          return html`<div class="cs-setting-option" key=${o.id}>
             <input type="radio" id=${id} name=${props.name}
-              checked=${props.value === o.value}
-              onChange=${function () { props.onChange(o.value); }} />
-            <label for=${id}>${o.label}</label>
+              checked=${props.value === o.id}
+              onChange=${function () { props.onChange(o.id); }} />
+            <label for=${id}>
+              <span class="cs-setting-label">${o.label}</span>
+              ${o.hint ? html`<span class="cs-setting-hint">${o.hint}</span>` : null}
+            </label>
           </div>`;
         })}
       </div>
@@ -374,30 +462,31 @@
   }
 
   function SettingsScreen() {
-    return html`<div class="cs-screen">
-      <h2 class="cs-screen-title">Settings</h2>
+    return html`<div>
+      <${Choicelist} legend="Theme" name="theme" grid=${true}
+        value=${themeGet()} onChange=${themeSet} options=${THEMES} />
 
-      <${Radios} legend="Theme" name="bg" value=${settingsGetBackground()}
+      <${Choicelist} legend="Brightness" name="bg" value=${settingsGetBackground()}
         onChange=${settingsSetBackground}
         options=${[
-          { value: 'sepia', label: 'Paper' },
-          { value: 'black', label: 'Dark' },
-          { value: 'white', label: 'Plain white' },
+          { id: 'sepia', label: 'Default' },
+          { id: 'black', label: 'Dark' },
+          { id: 'white', label: 'Light' }
         ]} />
 
-      <${Radios} legend="Typeface" name="family" value=${settingsGetFamily()}
-        onChange=${settingsSetFamily}
-        options=${[
-          { value: 'serif', label: 'Serif' },
-          { value: 'sans', label: 'Sans' },
-          { value: 'dyslexia', label: 'OpenDyslexic' },
-        ]} />
+      <${Choicelist} legend="Typeface" name="family" grid=${true}
+        value=${settingsGetFamily()} onChange=${settingsSetFamily}
+        options=${TYPEFACES} />
+
+      <${Choicelist} legend="Line width" name="width" value=${settingsGetWidth()}
+        onChange=${settingsSetWidth}
+        options=${SETTINGS_WIDTHS.map(function (w) { return { id: w.id, label: w.label }; })} />
 
       <fieldset class="cs-setting">
         <legend>Text size</legend>
         <div class="cs-setting-options">
           <button class="cs-btn" onClick=${function () { changeFontSize(false); }}
-            aria-label="Smaller text">A−</button>
+            aria-label="Smaller text">A&#8722;</button>
           <span class="cs-setting-readout">${Math.round(settingsGetZoom() * 100)}%</span>
           <button class="cs-btn" onClick=${function () { changeFontSize(true); }}
             aria-label="Larger text">A+</button>
@@ -405,19 +494,55 @@
       </fieldset>
 
       <fieldset class="cs-setting">
-        <legend>Page transitions</legend>
+        <legend>Motion</legend>
         <div class="cs-setting-options">
           <div class="cs-setting-option">
-            <input type="checkbox" id="cs-set-anim"
-              checked=${settingsGetAnimation()}
+            <input type="checkbox" id="cs-set-anim" checked=${settingsGetAnimation()}
               onChange=${function (e) { settingsSetAnimation(e.target.checked); }} />
-            <label for="cs-set-anim">Fade between screens</label>
+            <label for="cs-set-anim"><span class="cs-setting-label">Fade between screens</span></label>
           </div>
         </div>
       </fieldset>
 
-      <${BackBar} onBack=${function () { busSet({ screen: 'game' }); }} />
+      <fieldset class="cs-setting cs-setting-danger">
+        <legend>Game</legend>
+        <div class="cs-setting-options">
+          <button class="cs-btn cs-btn-danger" onClick=${shellRestart}>Restart from the beginning</button>
+        </div>
+      </fieldset>
     </div>`;
+  }
+
+  /* --- main menu --------------------------------------------------------- */
+
+  function MainMenu() {
+    var items = [
+      { label: 'Continue', hint: 'Back to the story', act: shellCloseOverlay },
+      { label: 'Saved games', hint: 'Load or create a save', act: function () { shellOpenOverlay('saves'); } },
+      { label: 'Stats', hint: 'Your character', act: showStats },
+      { label: 'Achievements', hint: 'What you have unlocked', act: function () { showAchievements(); } },
+      { label: 'Settings', hint: 'Theme, type, motion', act: function () { shellOpenOverlay('settings'); } },
+      { label: 'Restart', hint: 'Begin again', act: shellRestart }
+    ];
+    return html`<nav class="cs-menu">
+      ${items.map(function (it, i) {
+        return html`<button class="cs-menu-item" key=${i} onClick=${it.act}>
+          <span class="cs-menu-label">${it.label}</span>
+          <span class="cs-menu-hint">${it.hint}</span>
+        </button>`;
+      })}
+    </nav>`;
+  }
+
+  function CurrentOverlay() {
+    var o = bus.overlay;
+    if (!o) return null;
+    if (o === 'stats') return html`<${Overlay} title="Stats"><${StatsScreen} /><//>`;
+    if (o === 'saves') return html`<${Overlay} title="Saved games"><${SavesScreen} /><//>`;
+    if (o === 'settings') return html`<${Overlay} title="Settings"><${SettingsScreen} /><//>`;
+    if (o === 'achievements') return html`<${Overlay} title="Achievements"><${AchievementsScreen} /><//>`;
+    if (o === 'menu') return html`<${Overlay} title="Menu"><${MainMenu} /><//>`;
+    return null;
   }
 
   /* --- root -------------------------------------------------------------- */
@@ -429,24 +554,19 @@
      * the old approach: clone container1.innerHTML into a second container,
      * translateY by pageYOffset, then scrollTo(0,1) to hide mobile URL bars.
      */
-    if (bus.screen === 'achievements') return html`<${AchievementsScreen} />`;
-    if (bus.screen === 'saves') return html`<${SavesScreen} />`;
-    if (bus.screen === 'settings') return html`<${SettingsScreen} />`;
-
     var animate = window.animateEnabled !== false;
-    return html`<div class=${'cs-pane' + (animate ? ' cs-pane-enter' : '')}
-                     key=${bus.history.length}>
+    return html`<${Fragment}>
+      <div class=${'cs-pane' + (animate ? ' cs-pane-enter' : '')}
+           key=${bus.history.length}>
       ${bus.loading ? html`<p class="cs-loading">Loading…</p>` : null}
       <div id="text">
         ${bus.blocks.map(function (b, i) { return html`<${Block} block=${b} key=${i} />`; })}
       </div>
       <${Pending} pending=${bus.pending} />
-      ${bus.screen === 'stats' && !bus.pending
-        ? html`<${BackBar} label="Back to the story"
-            onBack=${function () { returnFromStats(); }} />`
-        : null}
       <${Modal} modal=${bus.modal} />
-    </div>`;
+      </div>
+      <${CurrentOverlay} />
+    <//>`;
   }
 
   /* --- mount ------------------------------------------------------------- */
@@ -467,7 +587,12 @@
     lastScreenIndex = bus.history.length;
 
     var paint = function () {
-      render(html`<${App} />`, mountRoot);
+      window.__csRendering = true;
+      try {
+        render(html`<${App} />`, mountRoot);
+      } finally {
+        window.__csRendering = false;
+      }
       legacySetTextNode(document.getElementById('text'));
     };
 

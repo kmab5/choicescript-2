@@ -285,8 +285,97 @@ safe.
 
 ---
 
-## Planned next
+### Round 2 — bugs from manual playthrough of Choice of Magic
 
-Task 16 — accessibility pass: keyboard-only playthrough of all screens,
-confirming the J/K/1–9/Q/W/? shortcuts still work, and verifying choices
-announce as a radio group and stat bars as meters.
+All five reported symptoms reproduced, diagnosed, and covered by
+`tools/regression-test.js` (18 assertions).
+
+**Authored `*script` nodes rendered at the page edges and carried over.**
+Published games do `target = document.getElementById('text'); …;
+target.appendChild(div)`. Preact owns `#text`, so raw appends landed after
+everything drawn and then survived the next diff. `appendChild` / `insertBefore`
+are now intercepted: authored nodes become positioned blocks in the render
+stream and clear on screen change. A second layer: the engine buffers prose in
+`accumulatedParagraph`, so a node could still land *before* text written above
+it — the interceptor flushes that buffer first.
+
+**Literal "undefined" under images.** `*line_break` calls `println()` with no
+argument when the paragraph buffer is empty, which is exactly the case after
+`*text_image`. `String(undefined)` printed it. Null-guarded.
+
+**Stats → Saves → Stats left Next dead.** The old design swapped `bus.screen`
+and stashed return state, which the round trip clobbered. Screens are now
+**overlays**: dialogs above a story that never unmounts, with stats rendering
+into a separate `statsBlocks` channel. Closing is "stop showing it" — no state
+to restore, nothing to desync.
+
+**`stat_chart` override missed `screenEmpty = false`.** Exposed by the fix
+above: the engine thought the stats page was blank, so `*finish` closed the
+overlay before anything rendered. Now matches stock (`prevLine = "block"`).
+
+**`window.reportError` was deleted with `ui.js`.** It is ChoiceScript's *own*
+error reporter, called unguarded from `util.js`. The missing-globals scan missed
+it because it is called as `window.reportError(...)`. Any engine error threw a
+secondary TypeError inside the error handler and killed the page silently.
+Reinstated, rendering errors inline instead of `alert()`. This is what then
+surfaced the compile bug below.
+
+**Compile failed for published games — two causes.**
+1. Games ship their own `mygame/index.html` pointing at the old runtime.
+   `tools/import-game.js` now imports scenes and media while keeping the shell,
+   and refuses to copy credential files.
+2. `compile.js` bundled only scenes named in `*scene_list`, so scenes reached by
+   `*gosub_scene` (`utils.txt`) were missing → "Couldn't load scene". It now
+   bundles every scene file present, and warns instead of crashing on a missing
+   stylesheet.
+
+Verified end to end by `tools/import-compile-test.js`: import → compile → load
+→ click through. Passes for both `martian-job` and `choice-of-magic`.
+
+### Round 2 — features
+
+- **Six themes** (Paperback, Terminal, Nocturne, Manuscript, Newsprint, Ember)
+  in `theme/themes.css`, each redefining tokens across all three brightness
+  scopes so they survive a game calling `changeBackgroundColor`.
+- **Six typefaces**, line-width control, text size, motion toggle, and
+  restart-with-confirmation.
+- **Main menu overlay**: Continue / Saved games / Stats / Achievements /
+  Settings / Restart.
+- **Saves screen** now has a working name-and-save control, not just a list.
+- **Favicon** probes for a game icon, falls back to the bundled ChoiceScript
+  submark in `web/images/`.
+
+---
+
+## Test suites
+
+| Suite | Covers | Result |
+|---|---|---|
+| `tools/fixture-test.js` | 5 released games, quicktest | 5/5, 0 regressions |
+| `unittest.sh` | engine unit tests | 177 passed |
+| `tools/bridge-test.js` | bus, bridge, stubs, legacy contract | 22 passed |
+| `tools/render-test.js` | full stack in jsdom, real turn played | 17 passed |
+| `tools/stats-test.js` | stat_chart rows and meter accessibility | 13 passed |
+| `tools/commands-test.js` | every UI command the corpus uses | 12 passed |
+| `tools/regression-test.js` | bugs from manual playthrough | 18 passed |
+| `tools/export-test.js` | compile.js single-file export plays | PASS |
+| `tools/import-compile-test.js` | import → compile → play | 10 passed |
+
+---
+
+## Still open
+
+**Task 16 — accessibility pass.** Not done, and not claimable from automated
+checks. jsdom verifies structure (native radios with labels, `role="meter"`
+with values, `aria-hidden` numerals) but cannot judge focus order, or how a
+screen reader actually announces a choice. Needs a real browser.
+
+**Design brief.** The impeccable skill requires an interview before writing
+PRODUCT.md; synthesising one from the task prompt is explicitly disallowed. The
+six themes are built on the existing token system, not on a confirmed design
+direction. A proper critique pass needs ~2 rounds of questions first.
+
+**Save system** works in jsdom round-trip tests but has not been verified in a
+real browser against real storage.
+
+**App Store credential** in the fixture zips should still be rotated.

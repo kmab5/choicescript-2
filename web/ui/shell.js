@@ -1,9 +1,14 @@
 /*
- * shell.js — the globals that live outside the reading surface.
+ * shell.js — everything outside the reading surface.
  *
- * Title/author, the stats round-trip, achievements plumbing, and the menu.
- * The four full screens (stats, saves, settings, achievements) arrive in their
- * own tasks; this file owns the navigation between them and the engine.
+ * Screens are OVERLAYS, not replacements. The story stays mounted underneath
+ * and is never cleared, so opening stats or settings mid-scene cannot lose the
+ * player's place or strand a parked callback.
+ *
+ * The stats screen is the tricky one: it runs a real engine scene
+ * (choicescript_stats.txt). Its output is routed to bus.statsBlocks — a
+ * separate channel — so engine writes during stats can never overwrite the
+ * story or leak into the next screen.
  */
 
 function changeTitle(title) {
@@ -17,63 +22,62 @@ function changeAuthor(author) {
   if (el) el.textContent = /^\s*by\s/i.test(author) ? author : 'by ' + author;
 }
 
-/* --- stats round-trip ----------------------------------------------------- */
+/* --- overlays ------------------------------------------------------------- */
+
+function shellCloseOverlay() {
+  if (bus.statsMode) {
+    bus.statsMode = false;
+    bus.statsBlocks = [];
+    bus.statsPending = null;
+  }
+  busSet({ overlay: null });
+}
+
+function shellOpenOverlay(name) {
+  if (bus.overlay === name) return shellCloseOverlay();
+  if (bus.statsMode && name !== 'stats') {
+    bus.statsMode = false;
+    bus.statsBlocks = [];
+    bus.statsPending = null;
+  }
+  busSet({ overlay: name });
+}
+
 /*
- * *stat_chart lives in choicescript_stats.txt, which the engine runs as a
- * separate scene. Showing stats means: remember where we are, run that scene,
- * and be able to come back to the exact same line.
+ * Runs choicescript_stats.txt into the stats channel. Because the story
+ * channel is untouched, closing the overlay is just "stop showing it" — there
+ * is no state to restore and nothing that can desync.
  */
-
-var shellReturnState = null;
-
 function showStats() {
-  if (bus.screen === 'stats') return returnFromStats();
+  if (bus.overlay === 'stats') return shellCloseOverlay();
   if (!window.stats || !window.stats.scene) return;
 
-  var scene = window.stats.scene;
-  shellReturnState = {
-    sceneName: scene.name,
-    lineNum: scene.lineNum,
-    indent: scene.indent,
-    blocks: bus.blocks,
-    pending: bus.pending,
-  };
-
-  busSet({ screen: 'stats' });
-  bus.blocks = [];
-  bus.pending = null;
+  bus.statsMode = true;
+  bus.statsBlocks = [];
+  bus.statsPending = null;
+  busSet({ overlay: 'stats' });
 
   var statsScene = new Scene('choicescript_stats', window.stats, window.nav, {
-    secondaryMode: 'stats',
+    secondaryMode: 'stats'
   });
   bridgeAttachScene(statsScene);
-  statsScene.execute();
-}
-
-function returnFromStats() {
-  if (!shellReturnState) return;
-  var s = shellReturnState;
-  shellReturnState = null;
-
-  busSet({ screen: 'game' });
-  bus.blocks = s.blocks;
-  bus.pending = s.pending;
-
-  /* If the player acted while on the stats screen the parked callback is gone;
-   * replay the line we left instead of restoring a stale pending. */
-  if (!s.pending) {
-    var scene = new Scene(s.sceneName, window.stats, window.nav, { saveSlot: '' });
-    bridgeAttachScene(scene);
-    scene.resetPage();
+  try {
+    statsScene.execute();
+  } catch (e) {
+    if (typeof console !== 'undefined') console.error(e);
+    busPush({ kind: 'text', html: 'The stats screen could not be loaded.' });
   }
-  busSet({});
 }
 
+/* *goto from within the stats screen jumps the STORY, so close the overlay. */
 function redirectFromStats(sceneName, label, originLine, callback) {
-  shellReturnState = null;
-  busSet({ screen: 'game' });
+  bus.statsMode = false;
+  bus.statsBlocks = [];
+  bus.statsPending = null;
+  busSet({ overlay: null });
   bus.blocks = [];
   bus.pending = null;
+
   var scene = new Scene(sceneName, window.stats, window.nav, { saveSlot: '' });
   bridgeAttachScene(scene);
   if (label) scene.gotoLabel = label;
@@ -81,60 +85,103 @@ function redirectFromStats(sceneName, label, originLine, callback) {
   if (callback) callback();
 }
 
+function returnFromStats() {
+  shellCloseOverlay();
+}
+
 function restoreCheckpointFromStats(slot, callback) {
-  shellReturnState = null;
-  busSet({ screen: 'game' });
+  shellCloseOverlay();
   if (typeof restoreCheckpoint === 'function') restoreCheckpoint(slot, callback);
   else if (callback) callback();
 }
 
-/* --- achievements plumbing ------------------------------------------------ */
-/* The full screen lands in its own task; this keeps *check_achievements
- * resolving so games that gate on it keep running. */
-
 function showAchievements(hideNextButton) {
-  checkAchievements(function () { busSet({ screen: 'achievements' }); });
+  checkAchievements(function () { shellOpenOverlay('achievements'); });
 }
+
+function showSaves() { shellOpenOverlay('saves'); }
+function showMenu() { shellOpenOverlay('settings'); }
+function showMainMenu() { shellOpenOverlay('menu'); }
 
 function cacheKnownPurchases(knownPurchases) {}
 
-/* --- menu ----------------------------------------------------------------- */
+/* --- restart -------------------------------------------------------------- */
 
-function showMenu() {
-  busSet({ screen: bus.screen === 'settings' ? 'game' : 'settings' });
-}
-
-function showSaves() {
-  busSet({ screen: bus.screen === 'saves' ? 'game' : 'saves' });
+function shellRestart() {
+  asyncConfirm(
+    'Start over from the beginning? Your current progress will be lost.',
+    function (ok) {
+      if (!ok) return;
+      shellCloseOverlay();
+      bus.blocks = [];
+      bus.pending = null;
+      bus.history = [];
+      busSet({});
+      if (typeof restartGame === 'function') restartGame('none');
+    }
+  );
 }
 
 /* --- boot ----------------------------------------------------------------- */
 
-/* keep lifetime achievements in storage as they are earned */
 function shellRecordAchievement() {
   if (typeof recordAchievements === 'function') recordAchievements();
 }
 
+/*
+ * Favicon: prefer an icon shipped with the game, fall back to the bundled
+ * ChoiceScript mark. Probe with an Image so a missing file doesn't leave a
+ * broken link in the tab.
+ */
+function shellSetFavicon() {
+  var candidates = ['icon.png', 'favicon.png', 'cover.png'];
+  var fallback = '../images/cs-logo-submark.png';
+
+  function apply(href) {
+    var link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = href;
+  }
+
+  function tryNext(i) {
+    if (i >= candidates.length) return apply(fallback);
+    var img = new Image();
+    img.onload = function () { apply(candidates[i]); };
+    img.onerror = function () { tryNext(i + 1); };
+    img.src = candidates[i];
+  }
+  tryNext(0);
+}
+
 function shellBoot() {
-  if (typeof loadPreferences === 'function') loadPreferences();
+  loadPreferences();
+  shellSetFavicon();
   appMount();
   if (typeof loadAndRestoreGame === 'function') loadAndRestoreGame();
 }
 
-/* Preferences: reuses the existing store keys so a player's settings survive
- * the upgrade. The settings screen replaces the UI, not the storage contract. */
+/* --- preferences ---------------------------------------------------------- */
+/* Reuses the existing store keys so a player's settings survive the upgrade. */
+
 function loadPreferences() {
   if (typeof initStore !== 'function' || !initStore()) {
     window.animateEnabled = true;
     return;
   }
+  window.store.get('preferredTheme', function (ok, value) {
+    if (ok && value) themeApply(value);
+  });
   window.store.get('preferredBackground', function (ok, value) {
     if (ok && /^(black|white)$/.test(value)) {
       document.body.classList.add(value === 'black' ? 'nightmode' : 'whitemode');
     }
   });
   window.store.get('preferredFamily', function (ok, value) {
-    if (ok && /^(sans|dyslexia)$/.test(value)) document.body.classList.add(value);
+    if (ok && value) settingsSetFamily(value, true);
   });
   window.store.get('preferredZoom', function (ok, value) {
     var z = parseFloat(value);
@@ -144,3 +191,34 @@ function loadPreferences() {
     window.animateEnabled = parseFloat(value) !== 2;
   });
 }
+
+/* --- error reporting ------------------------------------------------------ */
+/*
+ * ChoiceScript's own error reporter, called unguarded from util.js safeCall.
+ * It lived in the old ui.js. Without it, any engine error throws a secondary
+ * TypeError inside the error handler and the game dies with a blank page.
+ *
+ * The old version used alert() plus an email-support prompt. This renders the
+ * error in the page instead, so the player sees what happened and the console
+ * keeps the full trace.
+ */
+window.reportError = function (msg, file, line, column, error) {
+  if (window.console) {
+    if (error) {
+      window.console.error(error);
+      if (error.stack) window.console.error(error.stack);
+    } else {
+      window.console.error(msg);
+      if (file) window.console.error('file: ' + file);
+      if (line) window.console.error('line: ' + line);
+    }
+  }
+  var text = String(msg === null || msg === undefined ? 'An unknown error occurred.' : msg);
+  try {
+    if (typeof busPush === 'function') {
+      busPush({ kind: 'error', message: text });
+      return;
+    }
+  } catch (e) { /* fall through to alert */ }
+  if (typeof alert === 'function') alert(text);
+};

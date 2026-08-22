@@ -67,8 +67,7 @@ function printOptions(groups, options, callback) {
   if (!options) throw new Error('undefined options');
   if (!options.length) throw new Error('no options');
 
-  busSet({
-    pending: {
+  busSetPending({
       kind: 'choice',
       groups: groups,
       options: options,
@@ -76,7 +75,6 @@ function printOptions(groups, options, callback) {
         if (typeof safeCall === 'function') safeCall(null, function () { callback(option); });
         else callback(option);
       },
-    },
   });
 }
 
@@ -85,15 +83,13 @@ function printOptions(groups, options, callback) {
  * five fixture games), so this is the hottest path in the file.
  */
 function printButton(name, parent, isSubmit, code) {
-  busSet({
-    pending: {
+  busSetPending({
       kind: 'next',
       name: name,
       resume: function () {
         if (typeof safeCall === 'function') safeCall(null, code);
         else if (code) code();
       },
-    },
   });
   return null;
 }
@@ -102,8 +98,7 @@ function printButton(name, parent, isSubmit, code) {
 
 function printInput(target, inputOptions, callback, minimum, maximum, step) {
   inputOptions = inputOptions || {};
-  busSet({
-    pending: {
+  busSetPending({
       kind: 'input',
       long: !!inputOptions.long,
       numeric: !!inputOptions.numeric,
@@ -115,13 +110,11 @@ function printInput(target, inputOptions, callback, minimum, maximum, step) {
         if (typeof safeCall === 'function') safeCall(null, function () { callback(value); });
         else callback(value);
       },
-    },
   });
 }
 
 function printCheckboxes(options, submitButtonNameFunction, callback) {
-  busSet({
-    pending: {
+  busSetPending({
       kind: 'checkboxes',
       options: options,
       submitName: typeof submitButtonNameFunction === 'function'
@@ -131,7 +124,6 @@ function printCheckboxes(options, submitButtonNameFunction, callback) {
         if (typeof safeCall === 'function') safeCall(null, function () { callback(selected); });
         else callback(selected);
       },
-    },
   });
 }
 
@@ -228,6 +220,11 @@ function achieve(name, title, description) {
  * never fire, which is why scene.js needs no edits.
  */
 function bridgeAttachScene(scene) {
-  if (scene) scene.target = legacyTextNode();
+  if (scene) {
+    scene.target = legacyTextNode();
+    /* legacy.js needs the active scene to flush buffered prose before
+     * inserting a node appended by an authored *script block */
+    window.__csScene = scene;
+  }
   return scene;
 }

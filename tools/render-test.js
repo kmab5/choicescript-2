@@ -141,12 +141,15 @@ setTimeout(() => {
         const t = win.legacyTextNode();
         const div = win.document.createElement('div');
         win.setClass(div, 'statBar statLine');
-        t.appendChild(div);
-        ok('authored node survives in #text', t.querySelector('.statBar') !== null);
         ok('setClass applied both classes', div.className === 'statBar statLine');
+        t.appendChild(div);
 
-        console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
-        process.exit(failed ? 1 : 0);
+        setTimeout(() => {
+          ok('authored node mounts inside #text',
+            doc.getElementById('text').querySelector('.statBar') !== null);
+          console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
+          process.exit(failed ? 1 : 0);
+        }, 40);
       }, 30);
     }, 20);
   });

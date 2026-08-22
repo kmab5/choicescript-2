@@ -22,6 +22,10 @@
 
 /* bbcode used by printx/println/printParagraph. Kept identical to ui.js. */
 function replaceBbCode(msg) {
+  /* *line_break calls println() with no argument when the paragraph buffer is
+   * empty (e.g. immediately after an *image). String(undefined) would render
+   * the literal text "undefined" on the page. */
+  if (msg === null || msg === undefined) return '';
   return String(msg)
     .replace(/\[n\/\]/g, '<br>')
     .replace(/\[b\]/g, '<b>').replace(/\[\/b\]/g, '</b>')
@@ -97,8 +101,58 @@ function getFontFamily() {
  */
 var legacyTextEl = null;
 
+/*
+ * Published games append DOM nodes straight into #text from *script blocks:
+ *
+ *   target = document.getElementById('text');
+ *   div = document.createElement("div");
+ *   setClass(div, "statBar statLine");
+ *   target.appendChild(div);
+ *
+ * Preact owns #text, so a raw appendChild lands after everything the renderer
+ * has drawn (the node appears at the bottom of the page instead of where the
+ * script ran) and then survives the next diff (the node carries over onto the
+ * following screen).
+ *
+ * So we intercept. When the renderer itself is writing, appendChild behaves
+ * normally. When anything else calls it, the child becomes a block in the bus
+ * at the current position, and the renderer mounts it there.
+ */
+window.__csRendering = false;
+
 function legacySetTextNode(el) {
+  if (!el || el === legacyTextEl) return;
   legacyTextEl = el;
+  if (el.__csPatched) return;
+  el.__csPatched = true;
+
+  var nativeAppend = el.appendChild.bind(el);
+  var nativeInsert = el.insertBefore.bind(el);
+
+  /*
+   * The engine buffers prose in accumulatedParagraph and only emits it on
+   * paragraph(). A *script block that appends a node mid-buffer would land
+   * BEFORE the text written above it, so flush first.
+   */
+  function flushParagraph() {
+    var scene = window.__csScene;
+    if (scene && scene.accumulatedParagraph && scene.accumulatedParagraph.length) {
+      try { scene.paragraph(); } catch (e) { /* never block the append */ }
+    }
+  }
+
+  el.appendChild = function (child) {
+    if (window.__csRendering) return nativeAppend(child);
+    flushParagraph();
+    busPushQuiet({ kind: 'node', el: child });
+    return child;
+  };
+  el.insertBefore = function (child, ref) {
+    if (window.__csRendering) return nativeInsert(child, ref);
+    flushParagraph();
+    busPushQuiet({ kind: 'node', el: child });
+    return child;
+  };
 }
 
 function legacyTextNode() {

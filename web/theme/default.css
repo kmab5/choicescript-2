@@ -29,7 +29,11 @@ body {
 .cs-shell {
   max-width: var(--cs-measure);
   margin: 0 auto;
-  padding: var(--cs-space-5) var(--cs-space-4) var(--cs-space-6);
+  padding:
+    calc(var(--cs-space-5) + env(safe-area-inset-top))
+    calc(var(--cs-space-4) + env(safe-area-inset-right))
+    calc(var(--cs-space-6) + env(safe-area-inset-bottom))
+    calc(var(--cs-space-4) + env(safe-area-inset-left));
 }
 
 /* --- header -------------------------------------------------------------- */
@@ -63,7 +67,7 @@ body {
 
 .cs-toolbar {
   display: flex;
-  gap: var(--cs-space-1);
+  gap: var(--cs-space-2);
   flex: 0 0 auto;
 }
 
@@ -77,7 +81,13 @@ body {
   background: transparent;
   border: var(--cs-rule-width) solid var(--cs-rule);
   border-radius: var(--cs-radius);
-  padding: var(--cs-space-2) var(--cs-space-3);
+  padding: var(--cs-space-2) var(--cs-space-4);
+  /* WCAG 2.1 AA target size: never smaller than 44x44 */
+  min-height: var(--cs-touch);
+  min-width: var(--cs-touch);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
   transition: border-color var(--cs-fade) var(--cs-ease),
               background-color var(--cs-fade) var(--cs-ease);
@@ -156,14 +166,19 @@ body {
 .cs-option label {
   display: block;
   cursor: pointer;
+  /* WCAG 2.1 AA target size */
+  min-height: var(--cs-touch);
   padding: var(--cs-space-3) var(--cs-space-4) var(--cs-space-3) var(--cs-space-5);
   background: var(--cs-paper-raised);
   border: var(--cs-rule-width) solid var(--cs-rule);
   border-left: 3px solid var(--cs-rule);
-  border-radius: 0;
+  border-radius: var(--cs-radius);
+  -webkit-tap-highlight-color: transparent;
   transition: border-left-color var(--cs-fade) var(--cs-ease),
               background-color var(--cs-fade) var(--cs-ease);
 }
+
+.cs-option label:active { background: var(--cs-accent-wash); }
 
 .cs-option label:hover { border-left-color: var(--cs-accent); }
 
@@ -385,43 +400,148 @@ a { color: var(--cs-accent); text-underline-offset: 0.15em; }
   body { font-size: 1.0625rem; }
 }
 
-/* --- screens (achievements, saves, settings) ----------------------------- */
+/* --- z-index scale ------------------------------------------------------- */
+/* dropdown 10 · sticky 20 · overlay-backdrop 30 · overlay 40 · toast 50 */
 
-.cs-screen { padding: var(--cs-space-2) 0 0; }
+/* --- overlay screens ----------------------------------------------------- */
+/*
+ * Screens sit ABOVE the story rather than replacing it. The story stays
+ * mounted underneath, which is what makes closing an overlay safe: there is no
+ * state to restore.
+ */
 
-.cs-screen-title {
-  font-family: var(--cs-font-ui);
-  font-size: 1.25rem;
-  font-weight: 500;
-  margin: 0 0 var(--cs-space-2);
+.cs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--cs-space-5) var(--cs-space-4);
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--cs-paper) 72%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
 }
+
+@supports not (background: color-mix(in srgb, red 50%, transparent)) {
+  .cs-overlay { background: rgba(0, 0, 0, 0.55); }
+}
+
+.cs-overlay-panel {
+  position: relative;
+  z-index: 40;
+  width: 100%;
+  max-width: 60ch;
+  background: var(--cs-paper);
+  border: var(--cs-rule-width) solid var(--cs-rule);
+  border-radius: calc(var(--cs-radius) * 3);
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 12px 32px -8px rgba(0,0,0,.28);
+  padding: var(--cs-space-5);
+}
+
+.cs-overlay-panel:focus { outline: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .cs-overlay-panel { animation: cs-rise 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+}
+
+@keyframes cs-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+.cs-overlay-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cs-space-3);
+  padding-bottom: var(--cs-space-3);
+  margin-bottom: var(--cs-space-4);
+  border-bottom: var(--cs-rule-width) solid var(--cs-rule);
+}
+
+.cs-overlay-title {
+  font-family: var(--cs-font-ui);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.cs-icon-btn {
+  font-family: var(--cs-font-ui);
+  font-size: 1.375rem;
+  line-height: 1;
+  color: var(--cs-ink-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--cs-radius);
+  min-height: var(--cs-touch);
+  min-width: var(--cs-touch);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 160ms var(--cs-ease);
+}
+
+.cs-icon-btn:hover { color: var(--cs-ink); }
+
+.cs-overlay-body > :first-child { margin-top: 0; }
+
+/* stats rendered inside the overlay */
+.cs-statsbody #statsText p { margin: 0 0 var(--cs-space-3); }
+.cs-legacy { display: contents; }
+
+/* --- main menu ----------------------------------------------------------- */
+
+.cs-menu { display: flex; flex-direction: column; gap: var(--cs-space-2); }
+
+.cs-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  width: 100%;
+  background: transparent;
+  border: var(--cs-rule-width) solid var(--cs-rule);
+  border-left: 3px solid var(--cs-rule);
+  border-radius: var(--cs-radius);
+  padding: var(--cs-space-3) var(--cs-space-4);
+  cursor: pointer;
+  color: var(--cs-ink);
+  transition: border-left-color 180ms var(--cs-ease), background-color 180ms var(--cs-ease);
+}
+
+.cs-menu-item:hover {
+  border-left-color: var(--cs-accent);
+  background: var(--cs-paper-raised);
+}
+
+.cs-menu-label { font-family: var(--cs-font-ui); font-size: var(--cs-size-ui); font-weight: 500; }
+.cs-menu-hint { font-family: var(--cs-font-ui); font-size: var(--cs-size-small); color: var(--cs-ink-muted); }
+
+/* --- shared screen bits -------------------------------------------------- */
 
 .cs-screen-subtitle {
   font-family: var(--cs-font-ui);
   font-size: var(--cs-size-ui);
   font-weight: 500;
   color: var(--cs-ink-muted);
-  margin: var(--cs-space-6) 0 var(--cs-space-3);
+  margin: var(--cs-space-5) 0 var(--cs-space-3);
   padding-bottom: var(--cs-space-2);
   border-bottom: var(--cs-rule-width) solid var(--cs-rule);
 }
 
-.cs-screen-summary,
-.cs-empty {
+.cs-screen-summary, .cs-empty {
   font-family: var(--cs-font-ui);
   font-size: var(--cs-size-small);
   color: var(--cs-ink-muted);
-  margin: 0 0 var(--cs-space-5);
-}
-
-.cs-backbar {
-  margin-top: var(--cs-space-6);
-  padding-top: var(--cs-space-4);
-  border-top: var(--cs-rule-width) solid var(--cs-rule);
+  margin: 0 0 var(--cs-space-4);
 }
 
 /* achievements */
-
 .cs-achievement-list { list-style: none; margin: 0; padding: 0; }
 
 .cs-achievement {
@@ -430,92 +550,141 @@ a { color: var(--cs-accent); text-underline-offset: 0.15em; }
   margin-bottom: var(--cs-space-3);
 }
 
-.cs-achievement-locked {
-  border-left-color: var(--cs-rule);
-  color: var(--cs-ink-muted);
-}
-
-.cs-achievement-title {
-  font-family: var(--cs-font-ui);
-  font-weight: 500;
-  font-size: var(--cs-size-ui);
-}
-
+.cs-achievement-locked { border-left-color: var(--cs-rule); color: var(--cs-ink-muted); }
+.cs-achievement-title { font-family: var(--cs-font-ui); font-weight: 500; font-size: var(--cs-size-ui); }
 .cs-achievement-desc { font-size: var(--cs-size-ui); }
-
 .cs-achievement-points {
-  font-family: var(--cs-font-ui);
-  font-size: var(--cs-size-small);
-  color: var(--cs-ink-faint);
-  font-variant-numeric: tabular-nums;
-  margin-top: var(--cs-space-1);
+  font-family: var(--cs-font-ui); font-size: var(--cs-size-small);
+  color: var(--cs-ink-faint); font-variant-numeric: tabular-nums; margin-top: var(--cs-space-1);
 }
 
 /* saves */
-
+.cs-save-new { display: flex; gap: var(--cs-space-2); margin-bottom: var(--cs-space-4); }
+.cs-save-new .cs-input-field { flex: 1 1 auto; }
 .cs-save-list { list-style: none; margin: 0; padding: 0; }
 .cs-save { margin-bottom: var(--cs-space-2); }
 
 .cs-save-btn {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: var(--cs-space-3);
-  width: 100%;
-  text-align: left;
-  font-family: var(--cs-font-ui);
-  font-size: var(--cs-size-ui);
-  color: var(--cs-ink);
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: var(--cs-space-3); width: 100%; text-align: left;
+  font-family: var(--cs-font-ui); font-size: var(--cs-size-ui); color: var(--cs-ink);
   background: var(--cs-paper-raised);
   border: var(--cs-rule-width) solid var(--cs-rule);
   border-left: 3px solid var(--cs-rule);
-  padding: var(--cs-space-3) var(--cs-space-4);
-  cursor: pointer;
-  transition: border-left-color var(--cs-fade) var(--cs-ease);
+  border-radius: var(--cs-radius);
+  padding: var(--cs-space-3) var(--cs-space-4); cursor: pointer;
+  transition: border-left-color 180ms var(--cs-ease);
 }
 
 .cs-save-btn:hover { border-left-color: var(--cs-accent); }
 .cs-save-date { color: var(--cs-ink-faint); font-size: var(--cs-size-small); }
 
 /* settings */
-
 .cs-setting {
-  border: 0;
-  border-top: var(--cs-rule-width) solid var(--cs-rule);
-  margin: 0 0 var(--cs-space-5);
-  padding: var(--cs-space-4) 0 0;
+  border: 0; border-top: var(--cs-rule-width) solid var(--cs-rule);
+  margin: 0 0 var(--cs-space-5); padding: var(--cs-space-4) 0 0;
 }
 
+.cs-setting:first-child { border-top: 0; padding-top: 0; }
+
 .cs-setting legend {
-  font-family: var(--cs-font-ui);
-  font-size: var(--cs-size-small);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--cs-ink-faint);
-  padding: 0;
+  font-family: var(--cs-font-ui); font-size: var(--cs-size-small);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--cs-ink-faint); padding: 0;
 }
 
 .cs-setting-options {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--cs-space-3);
-  margin-top: var(--cs-space-3);
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--cs-space-3); margin-top: var(--cs-space-3);
 }
 
-.cs-setting-option { display: flex; align-items: center; gap: var(--cs-space-2); }
-
-.cs-setting-option label {
-  font-family: var(--cs-font-ui);
-  font-size: var(--cs-size-ui);
-  cursor: pointer;
+.cs-setting-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--cs-space-2); margin-top: var(--cs-space-3);
 }
+
+.cs-setting-option { display: flex; align-items: flex-start; gap: var(--cs-space-2); }
+.cs-setting-grid .cs-setting-option {
+  border: var(--cs-rule-width) solid var(--cs-rule);
+  border-radius: var(--cs-radius);
+  padding: var(--cs-space-2) var(--cs-space-3);
+  transition: border-color 180ms var(--cs-ease);
+}
+.cs-setting-grid .cs-setting-option:hover { border-color: var(--cs-accent); }
+.cs-setting-grid .cs-setting-option:has(input:checked) {
+  border-color: var(--cs-accent); background: var(--cs-accent-wash);
+}
+
+.cs-setting-option label { cursor: pointer; display: flex; flex-direction: column; gap: 1px; }
+.cs-setting-label { font-family: var(--cs-font-ui); font-size: var(--cs-size-ui); }
+.cs-setting-hint { font-family: var(--cs-font-ui); font-size: var(--cs-size-small); color: var(--cs-ink-muted); }
 
 .cs-setting-readout {
+  font-family: var(--cs-font-ui); font-size: var(--cs-size-ui);
+  font-variant-numeric: tabular-nums; color: var(--cs-ink-muted);
+  min-width: 4ch; text-align: center;
+}
+
+.cs-btn-danger { color: var(--cs-accent); border-color: var(--cs-accent); }
+.cs-btn-danger:hover { background: var(--cs-accent-wash); }
+
+@media (max-width: 34rem) {
+  .cs-overlay { padding: var(--cs-space-3); }
+  .cs-overlay-panel { padding: var(--cs-space-4); }
+  .cs-save-new { flex-direction: column; }
+}
+
+.cs-error-block {
   font-family: var(--cs-font-ui);
   font-size: var(--cs-size-ui);
-  font-variant-numeric: tabular-nums;
-  color: var(--cs-ink-muted);
-  min-width: 4ch;
-  text-align: center;
+  color: var(--cs-accent);
+  border-left: 3px solid var(--cs-accent);
+  background: var(--cs-accent-wash);
+  padding: var(--cs-space-3) var(--cs-space-4);
+  margin: var(--cs-space-4) 0;
+  border-radius: var(--cs-radius);
+}
+
+/* --- overlays become bottom sheets on phones ----------------------------- */
+/*
+ * Centred dialogs are a desktop pattern. On a phone held one-handed the
+ * controls belong in the thumb zone, so the panel anchors to the bottom edge
+ * and rises from it.
+ */
+
+@media (max-width: 40rem) {
+  .cs-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .cs-overlay-panel {
+    max-width: none;
+    border-radius: calc(var(--cs-radius) * 6) calc(var(--cs-radius) * 6) 0 0;
+    border-bottom: 0;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: var(--cs-space-4);
+    padding-bottom: calc(var(--cs-space-5) + env(safe-area-inset-bottom));
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* grab handle: signals "this sheet moves" */
+  .cs-overlay-panel::before {
+    content: "";
+    display: block;
+    width: 2.25rem;
+    height: 4px;
+    margin: 0 auto var(--cs-space-3);
+    border-radius: 999px;
+    background: var(--cs-rule);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .cs-overlay-panel { animation: cs-sheet-up 280ms cubic-bezier(0.16, 1, 0.3, 1); }
+  }
+}
+
+@keyframes cs-sheet-up {
+  from { transform: translateY(14px); opacity: 0; }
+  to { transform: none; opacity: 1; }
 }
